@@ -14,6 +14,7 @@ import esbLogo from "./assets/esb_logo.png";
 import esbMeta from "./assets/esb_meta.png";
 
 const STORAGE_KEY = "ai-excel-spreadsheets";
+const API_KEY_STORAGE_KEY = "ai-excel-api-key";
 
 type Spreadsheet = {
   id: string;
@@ -69,6 +70,7 @@ const App = () => {
   const [viewMode, setViewMode] = useState<"chat" | "sheet">("chat");
   const [expandedPanel, setExpandedPanel] = useState<"split" | "chat" | "sheet">("split");
   const [sheets, setSheets] = useState<Spreadsheet[]>(seedSheets);
+  const [apiKey, setApiKey] = useState("");
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -80,6 +82,21 @@ const App = () => {
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sheets));
   }, [sheets]);
+
+  useEffect(() => {
+    const storedKey = window.localStorage.getItem(API_KEY_STORAGE_KEY);
+    if (storedKey) {
+      setApiKey(storedKey);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (apiKey) {
+      window.localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
+    } else {
+      window.localStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+  }, [apiKey]);
 
   const hasStarted = messages.length > 0;
 
@@ -120,8 +137,21 @@ const App = () => {
           </View>
         </View>
         <View style={styles.headerActions}>
-          <Text style={styles.headerBadge}>No auth required</Text>
-          <Text style={styles.headerBadgeSecondary}>Payments + auth coming soon</Text>
+          <View style={styles.apiKeyCard}>
+            <Text style={styles.apiKeyLabel}>AI API key</Text>
+            <TextInput
+              placeholder="Paste API key (stored locally)"
+              placeholderTextColor="#94a3b8"
+              value={apiKey}
+              onChangeText={setApiKey}
+              style={styles.apiKeyInput}
+              secureTextEntry
+            />
+          </View>
+          <View style={styles.headerBadges}>
+            <Text style={styles.headerBadge}>No auth required</Text>
+            <Text style={styles.headerBadgeSecondary}>Payments + auth coming soon</Text>
+          </View>
         </View>
       </View>
 
@@ -411,6 +441,37 @@ const styles = StyleSheet.create({
   headerActions: {
     flexDirection: "row",
     gap: 12,
+    alignItems: "center"
+  },
+  apiKeyCard: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minWidth: 240
+  },
+  apiKeyLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0f172a",
+    marginBottom: 6
+  },
+  apiKeyInput: {
+    fontSize: 13,
+    color: "#0f172a",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e2e8f0"
+  },
+  headerBadges: {
+    flexDirection: "row",
+    gap: 12,
+    flexWrap: "wrap",
     alignItems: "center"
   },
   headerBadge: {
