@@ -23,6 +23,12 @@ type Spreadsheet = {
   rows: string[][];
 };
 
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
 const seedSheets: Spreadsheet[] = [
   {
     id: "market-insights",
@@ -65,12 +71,17 @@ const suggestions = [
 const App = () => {
   const { width } = useWindowDimensions();
   const isMobile = width < 900;
-  const [messages, setMessages] = useState<string[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [viewMode, setViewMode] = useState<"chat" | "sheet">("chat");
   const [expandedPanel, setExpandedPanel] = useState<"split" | "chat" | "sheet">("split");
   const [sheets, setSheets] = useState<Spreadsheet[]>(seedSheets);
   const [apiKey, setApiKey] = useState("");
+  const [apiProvider, setApiProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
+  const [isSending, setIsSending] = useState(false);
+  const [apiStatus, setApiStatus] = useState<{ tone: "error" | "success"; message: string } | null>(
+    null
+  );
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -100,18 +111,186 @@ const App = () => {
 
   const hasStarted = messages.length > 0;
 
-  const activeSheet = useMemo(() => sheets[0], [sheets]);
+  const activeSheetIndex = 0;
+  const activeSheet = useMemo(() => sheets[activeSheetIndex], [sheets]);
 
-  const handleSend = () => {
-    if (!input.trim()) {
+  const handleCellChange = (rowIndex: number, cellIndex: number, value: string) => {
+    setSheets((prev) =>
+      prev.map((sheet, index) => {
+        if (index !== activeSheetIndex) {
+          return sheet;
+        }
+        const updatedRows = sheet.rows.map((row, currentRowIndex) => {
+          if (currentRowIndex !== rowIndex) {
+            return row;
+          }
+          return row.map((cell, currentCellIndex) =>
+            currentCellIndex === cellIndex ? value : cell
+          );
+        });
+        return {
+          ...sheet,
+          rows: updatedRows,
+          lastUpdated: "Just now"
+        };
+      })
+    );
+  };
+
+  const createMessageId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const buildOpenAiReply = async (prompt: string) => {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.2,
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`OpenAI request failed (${response.status})`);
+    }
+    const data = (await response.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    return data.choices?.[0]?.message?.content?.trim() ?? "No response received.";
+  };
+
+  const buildAnthropicReply = async (prompt: string) => {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-3-5-sonnet-20241022",
+        max_tokens: 512,
+        temperature: 0.2,
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Claude request failed (${response.status})`);
+    }
+    const data = (await response.json()) as {
+      content?: { text?: string }[];
+    };
+    return data.content?.[0]?.text?.trim() ?? "No response received.";
+  };
+
+  const buildGeminiReply = async (prompt: string) => {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${encodeURIComponent(
+        apiKey
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2 }
+        })
+      }
+    );
+    if (!response.ok) {
+      throw new Error(`Gemini request failed (${response.status})`);
+    }
+    const data = (await response.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "No response received.";
+  };
+
+  const buildProviderReply = async (prompt: string) => {
+    if (apiProvider === "openai") {
+      return buildOpenAiReply(prompt);
+    }
+    if (apiProvider === "anthropic") {
+      return buildAnthropicReply(prompt);
+    }
+    return buildGeminiReply(prompt);
+  };
+
+  const providerLabel =
+    apiProvider === "openai" ? "OpenAI" : apiProvider === "anthropic" ? "Claude" : "Gemini";
+
+  const sendPrompt = async (prompt: string) => {
+    if (!prompt.trim()) {
       return;
     }
-    setMessages((prev) => [...prev, input.trim()]);
+    const userMessage: ChatMessage = {
+      id: createMessageId(),
+      role: "user",
+      content: prompt
+    };
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    setApiStatus(null);
+    if (!apiKey) {
+      setApiStatus({
+        tone: "error",
+        message: "Add an API key to send messages to the selected provider."
+      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createMessageId(),
+          role: "assistant",
+          content: "Add an API key so I can connect to your selected AI provider."
+        }
+      ]);
+      return;
+    }
+    setIsSending(true);
+    try {
+      const reply = await buildProviderReply(prompt);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createMessageId(),
+          role: "assistant",
+          content: reply
+        }
+      ]);
+      setApiStatus({
+        tone: "success",
+        message: `Connected to ${providerLabel}.`
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to reach the AI provider.";
+      setApiStatus({
+        tone: "error",
+        message
+      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createMessageId(),
+          role: "assistant",
+          content:
+            "I couldn’t reach the selected provider. Double-check the API key, model access, and CORS settings."
+        }
+      ]);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleStartWithPrompt = (prompt: string) => {
-    setMessages((prev) => [...prev, prompt]);
+    void sendPrompt(prompt);
+  };
+
+  const handleSend = () => {
+    void sendPrompt(input.trim());
   };
 
   const panelStyles = useMemo(() => {
@@ -147,6 +326,43 @@ const App = () => {
               style={styles.apiKeyInput}
               secureTextEntry
             />
+            <View style={styles.providerRow}>
+              {[
+                { id: "openai", label: "OpenAI" },
+                { id: "anthropic", label: "Claude" },
+                { id: "gemini", label: "Gemini" }
+              ].map((provider) => (
+                <Pressable
+                  key={provider.id}
+                  style={[
+                    styles.providerChip,
+                    apiProvider === provider.id && styles.providerChipActive
+                  ]}
+                  onPress={() =>
+                    setApiProvider(provider.id as "openai" | "anthropic" | "gemini")
+                  }
+                >
+                  <Text
+                    style={[
+                      styles.providerChipText,
+                      apiProvider === provider.id && styles.providerChipTextActive
+                    ]}
+                  >
+                    {provider.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {apiStatus && (
+              <Text
+                style={[
+                  styles.apiStatus,
+                  apiStatus.tone === "error" ? styles.apiStatusError : styles.apiStatusSuccess
+                ]}
+              >
+                {apiStatus.message}
+              </Text>
+            )}
           </View>
           <View style={styles.headerBadges}>
             <Text style={styles.headerBadge}>No auth required</Text>
@@ -170,9 +386,16 @@ const App = () => {
               value={input}
               onChangeText={setInput}
               style={styles.chatInput}
+              editable={!isSending}
             />
-            <Pressable style={styles.primaryButton} onPress={handleSend}>
-              <Text style={styles.primaryButtonText}>Generate</Text>
+            <Pressable
+              style={styles.primaryButton}
+              onPress={handleSend}
+              disabled={isSending}
+            >
+              <Text style={styles.primaryButtonText}>
+                {isSending ? "Generating..." : "Generate"}
+              </Text>
             </Pressable>
           </View>
           <View style={styles.pillRow}>
@@ -240,28 +463,27 @@ const App = () => {
                 <ScrollView style={styles.chatStream}>
                   {messages.map((message, index) => (
                     <View
-                      key={`${message}-${index}`}
+                      key={message.id}
                       style={[
                         styles.messageBubble,
-                        index % 2 === 0 ? styles.messageUser : styles.messageBot
+                        message.role === "user" ? styles.messageUser : styles.messageBot
                       ]}
                     >
                       <Text
                         style={[
                           styles.messageText,
-                          index % 2 === 0 && styles.messageUserText
+                          message.role === "user" && styles.messageUserText
                         ]}
                       >
-                        {message}
+                        {message.content}
                       </Text>
                     </View>
                   ))}
-                  <View style={[styles.messageBubble, styles.messageBot]}>
-                    <Text style={styles.messageText}>
-                      I can scrape, tabulate, and chart the data. Tell me what to add or edit in the
-                      sheet.
-                    </Text>
-                  </View>
+                  {isSending && (
+                    <View style={[styles.messageBubble, styles.messageBot]}>
+                      <Text style={styles.messageText}>Generating a response…</Text>
+                    </View>
+                  )}
                 </ScrollView>
                 <View style={styles.chatComposer}>
                   <TextInput
@@ -270,9 +492,16 @@ const App = () => {
                     value={input}
                     onChangeText={setInput}
                     style={styles.chatInput}
+                    editable={!isSending}
                   />
-                  <Pressable style={styles.primaryButton} onPress={handleSend}>
-                    <Text style={styles.primaryButtonText}>Send</Text>
+                  <Pressable
+                    style={styles.primaryButton}
+                    onPress={handleSend}
+                    disabled={isSending}
+                  >
+                    <Text style={styles.primaryButtonText}>
+                      {isSending ? "Sending..." : "Send"}
+                    </Text>
                   </Pressable>
                 </View>
                 <View style={styles.savedBlock}>
@@ -321,11 +550,18 @@ const App = () => {
                                 rowIndex === 0 && styles.tableHeaderCell
                               ]}
                             >
-                              <Text
-                                style={rowIndex === 0 ? styles.tableHeaderText : styles.tableText}
-                              >
-                                {cell}
-                              </Text>
+                              <TextInput
+                                value={cell}
+                                onChangeText={(value: string) =>
+                                  handleCellChange(rowIndex, cellIndex, value)
+                                }
+                                style={[
+                                  styles.tableInput,
+                                  rowIndex === 0 && styles.tableHeaderText,
+                                  rowIndex !== 0 && styles.tableText
+                                ]}
+                                placeholderTextColor="#94a3b8"
+                              />
                             </View>
                           ))}
                         </View>
@@ -467,6 +703,43 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     borderWidth: 1,
     borderColor: "#e2e8f0"
+  },
+  providerRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6
+  },
+  providerChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#cbd5f5",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: "#ffffff"
+  },
+  providerChipActive: {
+    borderColor: "#0f172a",
+    backgroundColor: "#0f172a"
+  },
+  providerChipText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#0f172a"
+  },
+  providerChipTextActive: {
+    color: "#ffffff"
+  },
+  apiStatus: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: "600"
+  },
+  apiStatusError: {
+    color: "#dc2626"
+  },
+  apiStatusSuccess: {
+    color: "#15803d"
   },
   headerBadges: {
     flexDirection: "row",
@@ -768,6 +1041,13 @@ const styles = StyleSheet.create({
   tableText: {
     color: "#334155",
     fontSize: 12
+  },
+  tableInput: {
+    width: "100%",
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    backgroundColor: "transparent",
+    borderWidth: 0
   },
   insightsRow: {
     flexDirection: "row",
