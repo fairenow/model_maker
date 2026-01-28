@@ -214,6 +214,14 @@ const App = () => {
     [sheets, activeSheetIndex]
   );
 
+  const analysisOverview = analysisLayer?.overview ?? "";
+  const analysisKeyPoints = analysisLayer?.keyPoints ?? [];
+  const analysisStructuredPlan = analysisLayer?.structuredPlan ?? [];
+  const analysisOpportunities = analysisLayer?.opportunities ?? [];
+  const analysisRisks = analysisLayer?.risks ?? [];
+  const analysisDataAttribution = analysisLayer?.dataAttribution ?? [];
+  const analysisConfidence = analysisLayer?.confidence ?? "";
+
   const handleCellChange = (rowIndex: number, cellIndex: number, value: string) => {
     setSheets((prev) =>
       prev.map((sheet, index) => {
@@ -620,14 +628,6 @@ User request: ${prompt}
       Math.max(16, Math.round((value / maxValue) * 90))
     );
   }, [chartData]);
-
-  const analysisOverview = analysisLayer?.overview ?? "";
-  const analysisKeyPoints = analysisLayer?.keyPoints ?? [];
-  const analysisStructuredPlan = analysisLayer?.structuredPlan ?? [];
-  const analysisOpportunities = analysisLayer?.opportunities ?? [];
-  const analysisRisks = analysisLayer?.risks ?? [];
-  const analysisDataAttribution = analysisLayer?.dataAttribution ?? [];
-  const analysisConfidence = analysisLayer?.confidence ?? "";
 
   return (
     <View style={styles.appShell}>
