@@ -621,6 +621,14 @@ User request: ${prompt}
     );
   }, [chartData]);
 
+  const analysisOverview = analysisLayer?.overview ?? "";
+  const analysisKeyPoints = analysisLayer?.keyPoints ?? [];
+  const analysisStructuredPlan = analysisLayer?.structuredPlan ?? [];
+  const analysisOpportunities = analysisLayer?.opportunities ?? [];
+  const analysisRisks = analysisLayer?.risks ?? [];
+  const analysisDataAttribution = analysisLayer?.dataAttribution ?? [];
+  const analysisConfidence = analysisLayer?.confidence ?? "";
+
   return (
     <View style={styles.appShell}>
       <View style={styles.header}>
@@ -938,33 +946,32 @@ User request: ${prompt}
                   <View style={styles.reportCard}>
                     <Text style={styles.reportTitle}>Strategic analysis layer</Text>
                     <Text style={styles.reportBody}>
-                      {analysisLayer?.overview ||
+                      {analysisOverview ||
                         "Generate a report to see the strategic synthesis and data attribution layer."}
                     </Text>
-                    {analysisLayer?.keyPoints?.length > 0 && (
+                    {analysisKeyPoints.length > 0 && (
                       <View style={styles.reportHighlights}>
-                        {analysisLayer.keyPoints.map((item, index) => (
+                        {analysisKeyPoints.map((item, index) => (
                           <View key={`analysis-key-${index}`} style={styles.highlightChip}>
                             <Text style={styles.highlightText}>{item}</Text>
                           </View>
                         ))}
                       </View>
                     )}
-                    {analysisLayer?.structuredPlan?.length > 0 && (
+                    {analysisStructuredPlan.length > 0 && (
                       <View style={styles.analysisList}>
-                        {analysisLayer.structuredPlan.map((item) => (
+                        {analysisStructuredPlan.map((item) => (
                           <Text key={item} style={styles.analysisItem}>
                             • {item}
                           </Text>
                         ))}
                       </View>
                     )}
-                    {(analysisLayer?.opportunities?.length > 0 ||
-                      analysisLayer?.risks?.length > 0) && (
+                    {(analysisOpportunities.length > 0 || analysisRisks.length > 0) && (
                       <View style={styles.analysisSplit}>
                         <View style={styles.analysisColumn}>
                           <Text style={styles.analysisTitle}>Opportunities</Text>
-                          {analysisLayer?.opportunities?.map((item) => (
+                          {analysisOpportunities.map((item) => (
                             <Text key={item} style={styles.analysisItem}>
                               • {item}
                             </Text>
@@ -972,7 +979,7 @@ User request: ${prompt}
                         </View>
                         <View style={styles.analysisColumn}>
                           <Text style={styles.analysisTitle}>Risks</Text>
-                          {analysisLayer?.risks?.map((item) => (
+                          {analysisRisks.map((item) => (
                             <Text key={item} style={styles.analysisItem}>
                               • {item}
                             </Text>
@@ -980,19 +987,19 @@ User request: ${prompt}
                         </View>
                       </View>
                     )}
-                    {analysisLayer?.dataAttribution?.length > 0 && (
+                    {analysisDataAttribution.length > 0 && (
                       <View style={styles.analysisList}>
                         <Text style={styles.analysisTitle}>Data attribution</Text>
-                        {analysisLayer.dataAttribution.map((item, index) => (
+                        {analysisDataAttribution.map((item, index) => (
                           <Text key={`attrib-${index}`} style={styles.analysisItem}>
                             • {item.source}: {item.notes}
                           </Text>
                         ))}
                       </View>
                     )}
-                    {analysisLayer?.confidence && (
+                    {analysisConfidence && (
                       <Text style={styles.analysisConfidence}>
-                        Confidence: {analysisLayer.confidence}
+                        Confidence: {analysisConfidence}
                       </Text>
                     )}
                   </View>
