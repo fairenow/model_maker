@@ -41,6 +41,15 @@ type ReportPayload = {
     highlights: string[];
     metrics: { label: string; value: string }[];
   };
+  analysis?: {
+    overview: string;
+    keyPoints: string[];
+    structuredPlan: string[];
+    opportunities: string[];
+    risks: string[];
+    dataAttribution: { source: string; notes: string }[];
+    confidence: string;
+  };
 };
 
 type ChatMessage = {
@@ -75,7 +84,7 @@ const seedSheets: Spreadsheet[] = [
 ];
 
 const featurePills = [
-  "Scrape & clean web data",
+  "Scrape & attribute open data",
   "Auto-format tables",
   "Generate charts",
   "Animate insights",
@@ -106,6 +115,15 @@ const App = () => {
   const [reportSummary, setReportSummary] = useState<string>("");
   const [reportHighlights, setReportHighlights] = useState<string[]>([]);
   const [reportMetrics, setReportMetrics] = useState<{ label: string; value: string }[]>([]);
+  const [analysisLayer, setAnalysisLayer] = useState<ReportPayload["analysis"]>({
+    overview: "",
+    keyPoints: [],
+    structuredPlan: [],
+    opportunities: [],
+    risks: [],
+    dataAttribution: [],
+    confidence: ""
+  });
   const [aiActions, setAiActions] = useState<string[]>([
     "Highlight top growth rows",
     "Add a summary tab",
@@ -119,6 +137,41 @@ const App = () => {
   });
   const [scraperEnabled, setScraperEnabled] = useState(true);
   const [scraperStatus, setScraperStatus] = useState<string | null>(null);
+  const [activeScrapers, setActiveScrapers] = useState<Record<string, boolean>>({
+    jinaReader: true,
+    jinaHttps: true,
+    jinaDirect: false
+  });
+
+  const scraperOptions = [
+    {
+      id: "jinaReader",
+      label: "Jina AI Reader",
+      description: "Open-source reader that extracts text + structure.",
+      buildUrl: (url: string) => {
+        const trimmed = url.replace(/^https?:\/\//, "");
+        return `https://r.jina.ai/http://${trimmed}`;
+      }
+    },
+    {
+      id: "jinaHttps",
+      label: "Jina Reader (HTTPS mode)",
+      description: "HTTPS-prefixed extraction for secure sources.",
+      buildUrl: (url: string) => {
+        const trimmed = url.replace(/^https?:\/\//, "");
+        return `https://r.jina.ai/https://${trimmed}`;
+      }
+    },
+    {
+      id: "jinaDirect",
+      label: "Jina Reader (direct http mode)",
+      description: "Raw HTTP reader for legacy or plain HTTP sources.",
+      buildUrl: (url: string) => {
+        const trimmed = url.replace(/^https?:\/\//, "");
+        return `https://r.jina.ai/http://${trimmed}`;
+      }
+    }
+  ];
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -216,18 +269,24 @@ const App = () => {
     if (!scraperEnabled || urls.length === 0) {
       return "";
     }
-    setScraperStatus("Scraping sources with Jina AI Reader...");
+    const enabledScrapers = scraperOptions.filter((option) => activeScrapers[option.id]);
+    if (enabledScrapers.length === 0) {
+      setScraperStatus("Select at least one scraper to gather sources.");
+      return "";
+    }
+    setScraperStatus(`Scraping ${urls.length} url(s) with ${enabledScrapers.length} scrapers...`);
     const results = await Promise.allSettled(
-      urls.map(async (url) => {
-        const trimmed = url.replace(/^https?:\/\//, "");
-        const scrapeUrl = `https://r.jina.ai/http://${trimmed}`;
-        const response = await fetch(scrapeUrl);
-        if (!response.ok) {
-          throw new Error(`Scraper request failed (${response.status})`);
-        }
-        const text = await response.text();
-        return `Source: ${url}\n${text.slice(0, 3500)}`;
-      })
+      urls.flatMap((url) =>
+        enabledScrapers.map(async (scraper) => {
+          const scrapeUrl = scraper.buildUrl(url);
+          const response = await fetch(scrapeUrl);
+          if (!response.ok) {
+            throw new Error(`Scraper request failed (${response.status})`);
+          }
+          const text = await response.text();
+          return `Source: ${url}\nScraper: ${scraper.label}\n${text.slice(0, 2800)}`;
+        })
+      )
     );
     const fulfilled = results
       .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
@@ -254,6 +313,15 @@ Return only JSON in the following shape:
   "report": {
     "highlights": ["Insight 1", "Insight 2"],
     "metrics": [{"label": "Metric", "value": "Value"}]
+  },
+  "analysis": {
+    "overview": "Strategic synthesis in 2-3 sentences.",
+    "keyPoints": ["Key driver 1", "Key driver 2"],
+    "structuredPlan": ["Step 1", "Step 2"],
+    "opportunities": ["Opportunity 1", "Opportunity 2"],
+    "risks": ["Risk 1", "Risk 2"],
+    "dataAttribution": [{"source": "Source name or URL", "notes": "How it informed the output"}],
+    "confidence": "High/Medium/Low with a brief reason"
   }
 }
 Rules:
@@ -261,9 +329,78 @@ Rules:
 - Use realistic, non-generic data. If locations/companies are needed, use real names.
 - The chart values must be numeric and correspond to the spreadsheet.
 - Keep the summary concise and action-oriented.
+- Provide deeper analysis with stronger data points and a strategic, logical structure even when inputs are vague.
+- Use an attribution-style audit trail in analysis.dataAttribution that cites sources or states when assumptions were needed.
 ${scrapedContext ? `\nScraped sources:\n${scrapedContext}` : ""}
 User request: ${prompt}
 `;
+
+  const toCsv = (rows: string[][]) =>
+    rows
+      .map((row) =>
+        row
+          .map((cell) => `"${cell.replace(/"/g, '""')}"`)
+          .join(",")
+      )
+      .join("\n");
+
+  const downloadBlob = (content: BlobPart | Blob, filename: string, type: string) => {
+    const blob = content instanceof Blob ? content : new Blob([content], { type });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadCsv = () => {
+    const csv = toCsv(activeSheet.rows);
+    downloadBlob(csv, `${activeSheet.name.replace(/\s+/g, "-").toLowerCase()}.csv`, "text/csv");
+  };
+
+  const escapePdfText = (text: string) =>
+    text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+
+  const buildPdf = (rows: string[][]) => {
+    const encoder = new TextEncoder();
+    const lines = rows.map((row) => row.join(" | "));
+    const maxLines = Math.min(lines.length, 40);
+    const contentLines = [];
+    for (let index = 0; index < maxLines; index += 1) {
+      const line = escapePdfText(lines[index]);
+      const y = 740 - index * 16;
+      contentLines.push(`BT /F1 12 Tf 72 ${y} Td (${line}) Tj ET`);
+    }
+    const content = contentLines.join("\n");
+    const objects = [
+      "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+      "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
+      `4 0 obj\n<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream\nendobj\n`,
+      "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+    ];
+    const header = "%PDF-1.4\n";
+    const offsets: number[] = [0];
+    let offset = encoder.encode(header).length;
+    objects.forEach((obj) => {
+      offsets.push(offset);
+      offset += encoder.encode(obj).length;
+    });
+    const xrefStart = offset;
+    const xrefEntries = offsets
+      .slice(1)
+      .map((value) => `${value.toString().padStart(10, "0")} 00000 n \n`)
+      .join("");
+    const xref = `xref\n0 6\n0000000000 65535 f \n${xrefEntries}`;
+    const trailer = `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+    return new Blob([header, ...objects, xref, trailer], { type: "application/pdf" });
+  };
+
+  const handleDownloadPdf = () => {
+    const pdf = buildPdf(activeSheet.rows);
+    downloadBlob(pdf, `${activeSheet.name.replace(/\s+/g, "-").toLowerCase()}.pdf`, "application/pdf");
+  };
 
   const buildOpenAiReply = async (prompt: string) => {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -362,6 +499,15 @@ User request: ${prompt}
     setInput("");
     setApiStatus(null);
     setScraperStatus(null);
+    setAnalysisLayer({
+      overview: "",
+      keyPoints: [],
+      structuredPlan: [],
+      opportunities: [],
+      risks: [],
+      dataAttribution: [],
+      confidence: ""
+    });
     if (!apiKey) {
       setApiStatus({
         tone: "error",
@@ -396,6 +542,15 @@ User request: ${prompt}
         setReportSummary(payload.message);
         setReportHighlights(payload.report?.highlights ?? []);
         setReportMetrics(payload.report?.metrics ?? []);
+        setAnalysisLayer({
+          overview: payload.analysis?.overview ?? "",
+          keyPoints: payload.analysis?.keyPoints ?? [],
+          structuredPlan: payload.analysis?.structuredPlan ?? [],
+          opportunities: payload.analysis?.opportunities ?? [],
+          risks: payload.analysis?.risks ?? [],
+          dataAttribution: payload.analysis?.dataAttribution ?? [],
+          confidence: payload.analysis?.confidence ?? ""
+        });
         setAiActions(payload.actions?.length ? payload.actions : aiActions);
         setChartData(payload.chart ?? chartData);
         setMessages((prev) => [
@@ -517,7 +672,7 @@ User request: ${prompt}
               ))}
             </View>
             <View style={styles.scraperRow}>
-              <Text style={styles.scraperLabel}>Open scraper (Jina AI Reader)</Text>
+              <Text style={styles.scraperLabel}>Open scrapers (multi-source)</Text>
               <Pressable
                 style={[
                   styles.scraperToggle,
@@ -546,6 +701,32 @@ User request: ${prompt}
               </Text>
             )}
             {scraperStatus && <Text style={styles.scraperStatus}>{scraperStatus}</Text>}
+            <View style={styles.scraperOptions}>
+              {scraperOptions.map((option) => (
+                <Pressable
+                  key={option.id}
+                  style={[
+                    styles.scraperChip,
+                    activeScrapers[option.id] && styles.scraperChipActive
+                  ]}
+                  onPress={() =>
+                    setActiveScrapers((prev) => ({
+                      ...prev,
+                      [option.id]: !prev[option.id]
+                    }))
+                  }
+                >
+                  <Text
+                    style={[
+                      styles.scraperChipText,
+                      activeScrapers[option.id] && styles.scraperChipTextActive
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
           <View style={styles.headerBadges}>
             <Text style={styles.headerBadge}>No auth required</Text>
@@ -719,10 +900,10 @@ User request: ${prompt}
                 <View style={styles.canvasHeader}>
                   <Text style={styles.panelTitle}>Spreadsheet canvas</Text>
                   <View style={styles.exportRow}>
-                    <Pressable style={styles.secondaryButton}>
+                    <Pressable style={styles.secondaryButton} onPress={handleDownloadCsv}>
                       <Text style={styles.secondaryButtonText}>Download CSV</Text>
                     </Pressable>
-                    <Pressable style={styles.secondaryButton}>
+                    <Pressable style={styles.secondaryButton} onPress={handleDownloadPdf}>
                       <Text style={styles.secondaryButtonText}>Download PDF</Text>
                     </Pressable>
                   </View>
@@ -752,6 +933,67 @@ User request: ${prompt}
                           </View>
                         ))}
                       </View>
+                    )}
+                  </View>
+                  <View style={styles.reportCard}>
+                    <Text style={styles.reportTitle}>Strategic analysis layer</Text>
+                    <Text style={styles.reportBody}>
+                      {analysisLayer?.overview ||
+                        "Generate a report to see the strategic synthesis and data attribution layer."}
+                    </Text>
+                    {analysisLayer?.keyPoints?.length > 0 && (
+                      <View style={styles.reportHighlights}>
+                        {analysisLayer.keyPoints.map((item, index) => (
+                          <View key={`analysis-key-${index}`} style={styles.highlightChip}>
+                            <Text style={styles.highlightText}>{item}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    {analysisLayer?.structuredPlan?.length > 0 && (
+                      <View style={styles.analysisList}>
+                        {analysisLayer.structuredPlan.map((item) => (
+                          <Text key={item} style={styles.analysisItem}>
+                            • {item}
+                          </Text>
+                        ))}
+                      </View>
+                    )}
+                    {(analysisLayer?.opportunities?.length > 0 ||
+                      analysisLayer?.risks?.length > 0) && (
+                      <View style={styles.analysisSplit}>
+                        <View style={styles.analysisColumn}>
+                          <Text style={styles.analysisTitle}>Opportunities</Text>
+                          {analysisLayer?.opportunities?.map((item) => (
+                            <Text key={item} style={styles.analysisItem}>
+                              • {item}
+                            </Text>
+                          ))}
+                        </View>
+                        <View style={styles.analysisColumn}>
+                          <Text style={styles.analysisTitle}>Risks</Text>
+                          {analysisLayer?.risks?.map((item) => (
+                            <Text key={item} style={styles.analysisItem}>
+                              • {item}
+                            </Text>
+                          ))}
+                        </View>
+                      </View>
+                    )}
+                    {analysisLayer?.dataAttribution?.length > 0 && (
+                      <View style={styles.analysisList}>
+                        <Text style={styles.analysisTitle}>Data attribution</Text>
+                        {analysisLayer.dataAttribution.map((item, index) => (
+                          <Text key={`attrib-${index}`} style={styles.analysisItem}>
+                            • {item.source}: {item.notes}
+                          </Text>
+                        ))}
+                      </View>
+                    )}
+                    {analysisLayer?.confidence && (
+                      <Text style={styles.analysisConfidence}>
+                        Confidence: {analysisLayer.confidence}
+                      </Text>
                     )}
                   </View>
                   <View style={styles.sheetCard}>
@@ -1003,6 +1245,32 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     color: "#0ea5e9"
+  },
+  scraperOptions: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6
+  },
+  scraperChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#cbd5f5",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: "#ffffff"
+  },
+  scraperChipActive: {
+    borderColor: "#0f172a",
+    backgroundColor: "#0f172a"
+  },
+  scraperChipText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#0f172a"
+  },
+  scraperChipTextActive: {
+    color: "#ffffff"
   },
   headerBadges: {
     flexDirection: "row",
@@ -1293,6 +1561,36 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8
+  },
+  analysisList: {
+    marginTop: 12
+  },
+  analysisItem: {
+    marginTop: 4,
+    color: "#475569",
+    fontSize: 12,
+    lineHeight: 18
+  },
+  analysisSplit: {
+    marginTop: 12,
+    flexDirection: "row",
+    gap: 16,
+    flexWrap: "wrap"
+  },
+  analysisColumn: {
+    flex: 1,
+    minWidth: 180
+  },
+  analysisTitle: {
+    fontWeight: "700",
+    color: "#0f172a",
+    fontSize: 12
+  },
+  analysisConfidence: {
+    marginTop: 10,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#0f172a"
   },
   highlightChip: {
     backgroundColor: "#e0f2fe",
