@@ -23,6 +23,26 @@ type Spreadsheet = {
   rows: string[][];
 };
 
+type ChartPayload = {
+  title: string;
+  labels: string[];
+  values: number[];
+};
+
+type ReportPayload = {
+  message: string;
+  spreadsheet: {
+    name: string;
+    rows: string[][];
+  };
+  chart: ChartPayload;
+  actions: string[];
+  report: {
+    highlights: string[];
+    metrics: { label: string; value: string }[];
+  };
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -82,11 +102,32 @@ const App = () => {
   const [apiStatus, setApiStatus] = useState<{ tone: "error" | "success"; message: string } | null>(
     null
   );
+  const [activeSheetId, setActiveSheetId] = useState<string>(seedSheets[0]?.id ?? "");
+  const [reportSummary, setReportSummary] = useState<string>("");
+  const [reportHighlights, setReportHighlights] = useState<string[]>([]);
+  const [reportMetrics, setReportMetrics] = useState<{ label: string; value: string }[]>([]);
+  const [aiActions, setAiActions] = useState<string[]>([
+    "Highlight top growth rows",
+    "Add a summary tab",
+    "Animate KPI cards",
+    "Insert forecast chart"
+  ]);
+  const [chartData, setChartData] = useState<ChartPayload>({
+    title: "Chart preview",
+    labels: ["Q1", "Q2", "Q3", "Q4"],
+    values: [72, 88, 56, 80]
+  });
+  const [scraperEnabled, setScraperEnabled] = useState(true);
+  const [scraperStatus, setScraperStatus] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     if (stored) {
-      setSheets(JSON.parse(stored) as Spreadsheet[]);
+      const parsedSheets = JSON.parse(stored) as Spreadsheet[];
+      setSheets(parsedSheets);
+      if (parsedSheets.length > 0) {
+        setActiveSheetId(parsedSheets[0].id);
+      }
     }
   }, []);
 
@@ -111,8 +152,14 @@ const App = () => {
 
   const hasStarted = messages.length > 0;
 
-  const activeSheetIndex = 0;
-  const activeSheet = useMemo(() => sheets[activeSheetIndex], [sheets]);
+  const activeSheetIndex = Math.max(
+    0,
+    sheets.findIndex((sheet) => sheet.id === activeSheetId)
+  );
+  const activeSheet = useMemo(
+    () => sheets[activeSheetIndex] ?? seedSheets[0],
+    [sheets, activeSheetIndex]
+  );
 
   const handleCellChange = (rowIndex: number, cellIndex: number, value: string) => {
     setSheets((prev) =>
@@ -138,6 +185,85 @@ const App = () => {
   };
 
   const createMessageId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const extractJsonBlock = (content: string) => {
+    const fencedMatch = content.match(/```json([\s\S]*?)```/i);
+    if (fencedMatch?.[1]) {
+      return fencedMatch[1].trim();
+    }
+    const braceMatch = content.match(/\{[\s\S]*\}/);
+    return braceMatch ? braceMatch[0] : content.trim();
+  };
+
+  const parseAutomationPayload = (content: string): ReportPayload | null => {
+    try {
+      const jsonPayload = JSON.parse(extractJsonBlock(content)) as ReportPayload;
+      if (!jsonPayload?.spreadsheet?.rows?.length) {
+        return null;
+      }
+      return jsonPayload;
+    } catch {
+      return null;
+    }
+  };
+
+  const extractUrls = (text: string) => {
+    const matches = text.match(/https?:\/\/[^\s)]+/g);
+    return matches ? Array.from(new Set(matches)) : [];
+  };
+
+  const fetchScrapedContext = async (urls: string[]) => {
+    if (!scraperEnabled || urls.length === 0) {
+      return "";
+    }
+    setScraperStatus("Scraping sources with Jina AI Reader...");
+    const results = await Promise.allSettled(
+      urls.map(async (url) => {
+        const trimmed = url.replace(/^https?:\/\//, "");
+        const scrapeUrl = `https://r.jina.ai/http://${trimmed}`;
+        const response = await fetch(scrapeUrl);
+        if (!response.ok) {
+          throw new Error(`Scraper request failed (${response.status})`);
+        }
+        const text = await response.text();
+        return `Source: ${url}\n${text.slice(0, 3500)}`;
+      })
+    );
+    const fulfilled = results
+      .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
+      .map((result) => result.value);
+    if (fulfilled.length === 0) {
+      setScraperStatus("Scraper sources failed. Check the URLs and try again.");
+      return "";
+    }
+    setScraperStatus("Scraper sources loaded.");
+    return fulfilled.join("\n\n");
+  };
+
+  const buildAutomationPrompt = (prompt: string, scrapedContext: string) => `
+You are an automation agent that always starts from a spreadsheet. Create data tables, reports, and charts based on the user request.
+Return only JSON in the following shape:
+{
+  "message": "short summary for the user",
+  "spreadsheet": {
+    "name": "short sheet name",
+    "rows": [["Header 1","Header 2"], ["Row1 col1","Row1 col2"]]
+  },
+  "chart": { "title": "Chart title", "labels": ["Label 1"], "values": [12] },
+  "actions": ["Next action 1", "Next action 2"],
+  "report": {
+    "highlights": ["Insight 1", "Insight 2"],
+    "metrics": [{"label": "Metric", "value": "Value"}]
+  }
+}
+Rules:
+- Always include a spreadsheet with 8-12 data rows and clear headers.
+- Use realistic, non-generic data. If locations/companies are needed, use real names.
+- The chart values must be numeric and correspond to the spreadsheet.
+- Keep the summary concise and action-oriented.
+${scrapedContext ? `\nScraped sources:\n${scrapedContext}` : ""}
+User request: ${prompt}
+`;
 
   const buildOpenAiReply = async (prompt: string) => {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -187,7 +313,7 @@ const App = () => {
 
   const buildGeminiReply = async (prompt: string) => {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${encodeURIComponent(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(
         apiKey
       )}`,
       {
@@ -235,6 +361,7 @@ const App = () => {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setApiStatus(null);
+    setScraperStatus(null);
     if (!apiKey) {
       setApiStatus({
         tone: "error",
@@ -252,15 +379,43 @@ const App = () => {
     }
     setIsSending(true);
     try {
-      const reply = await buildProviderReply(prompt);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: createMessageId(),
-          role: "assistant",
-          content: reply
-        }
-      ]);
+      const urls = extractUrls(prompt);
+      const scrapedContext = await fetchScrapedContext(urls);
+      const automationPrompt = buildAutomationPrompt(prompt, scrapedContext);
+      const reply = await buildProviderReply(automationPrompt);
+      const payload = parseAutomationPayload(reply);
+      if (payload) {
+        const newSheet: Spreadsheet = {
+          id: `${payload.spreadsheet.name.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`,
+          name: payload.spreadsheet.name,
+          lastUpdated: "Just now",
+          rows: payload.spreadsheet.rows
+        };
+        setSheets((prev) => [newSheet, ...prev]);
+        setActiveSheetId(newSheet.id);
+        setReportSummary(payload.message);
+        setReportHighlights(payload.report?.highlights ?? []);
+        setReportMetrics(payload.report?.metrics ?? []);
+        setAiActions(payload.actions?.length ? payload.actions : aiActions);
+        setChartData(payload.chart ?? chartData);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createMessageId(),
+            role: "assistant",
+            content: payload.message
+          }
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createMessageId(),
+            role: "assistant",
+            content: reply
+          }
+        ]);
+      }
       setApiStatus({
         tone: "success",
         message: `Connected to ${providerLabel}.`
@@ -280,6 +435,7 @@ const App = () => {
             "I couldn’t reach the selected provider. Double-check the API key, model access, and CORS settings."
         }
       ]);
+      setScraperStatus(null);
     } finally {
       setIsSending(false);
     }
@@ -302,6 +458,13 @@ const App = () => {
     }
     return { chat: styles.panelSplit, sheet: styles.panelSplit };
   }, [expandedPanel]);
+
+  const chartBars = useMemo(() => {
+    const maxValue = Math.max(...chartData.values, 1);
+    return chartData.values.map((value) =>
+      Math.max(16, Math.round((value / maxValue) * 90))
+    );
+  }, [chartData]);
 
   return (
     <View style={styles.appShell}>
@@ -353,6 +516,25 @@ const App = () => {
                 </Pressable>
               ))}
             </View>
+            <View style={styles.scraperRow}>
+              <Text style={styles.scraperLabel}>Open scraper (Jina AI Reader)</Text>
+              <Pressable
+                style={[
+                  styles.scraperToggle,
+                  scraperEnabled && styles.scraperToggleActive
+                ]}
+                onPress={() => setScraperEnabled((prev) => !prev)}
+              >
+                <Text
+                  style={[
+                    styles.scraperToggleText,
+                    scraperEnabled && styles.scraperToggleTextActive
+                  ]}
+                >
+                  {scraperEnabled ? "On" : "Off"}
+                </Text>
+              </Pressable>
+            </View>
             {apiStatus && (
               <Text
                 style={[
@@ -363,6 +545,7 @@ const App = () => {
                 {apiStatus.message}
               </Text>
             )}
+            {scraperStatus && <Text style={styles.scraperStatus}>{scraperStatus}</Text>}
           </View>
           <View style={styles.headerBadges}>
             <Text style={styles.headerBadge}>No auth required</Text>
@@ -376,8 +559,9 @@ const App = () => {
           <Image source={esbMeta} style={styles.heroLogo} />
           <Text style={styles.heroTitle}>Build a spreadsheet in one chat.</Text>
           <Text style={styles.heroBody}>
-            Ask the AI to scrape, format, chart, and animate data. Everything stays saved locally
-            on your device, with one-click downloads to CSV or PDF.
+            Every request starts with a spreadsheet, then expands into reports, charts, and
+            export-ready data. Everything stays saved locally on your device, with one-click
+            downloads to CSV or PDF.
           </Text>
           <View style={styles.chatInputWrap}>
             <TextInput
@@ -507,10 +691,24 @@ const App = () => {
                 <View style={styles.savedBlock}>
                   <Text style={styles.sectionTitle}>Saved locally</Text>
                   {sheets.map((sheet) => (
-                    <View key={sheet.id} style={styles.savedRow}>
-                      <Text style={styles.savedName}>{sheet.name}</Text>
+                    <Pressable
+                      key={sheet.id}
+                      style={[
+                        styles.savedRow,
+                        sheet.id === activeSheetId && styles.savedRowActive
+                      ]}
+                      onPress={() => setActiveSheetId(sheet.id)}
+                    >
+                      <Text
+                        style={[
+                          styles.savedName,
+                          sheet.id === activeSheetId && styles.savedNameActive
+                        ]}
+                      >
+                        {sheet.name}
+                      </Text>
                       <Text style={styles.savedMeta}>{sheet.lastUpdated}</Text>
-                    </View>
+                    </Pressable>
                   ))}
                 </View>
               </View>
@@ -530,6 +728,32 @@ const App = () => {
                   </View>
                 </View>
                 <View style={styles.canvasBody}>
+                  <View style={styles.reportCard}>
+                    <Text style={styles.reportTitle}>Report summary</Text>
+                    <Text style={styles.reportBody}>
+                      {reportSummary ||
+                        "Start from a spreadsheet and we'll generate a report, charts, and export-ready data."}
+                    </Text>
+                    {reportHighlights.length > 0 && (
+                      <View style={styles.reportHighlights}>
+                        {reportHighlights.map((item, index) => (
+                          <View key={`highlight-${index}`} style={styles.highlightChip}>
+                            <Text style={styles.highlightText}>{item}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    {reportMetrics.length > 0 && (
+                      <View style={styles.metricRow}>
+                        {reportMetrics.map((metric) => (
+                          <View key={metric.label} style={styles.metricCard}>
+                            <Text style={styles.metricLabel}>{metric.label}</Text>
+                            <Text style={styles.metricValue}>{metric.value}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
                   <View style={styles.sheetCard}>
                     <Text style={styles.sheetTitle}>{activeSheet.name}</Text>
                     <Text style={styles.sheetMeta}>Last updated {activeSheet.lastUpdated}</Text>
@@ -570,12 +794,12 @@ const App = () => {
                   </View>
                   <View style={styles.insightsRow}>
                     <View style={styles.insightCard}>
-                      <Text style={styles.insightTitle}>Chart preview</Text>
+                      <Text style={styles.insightTitle}>{chartData.title}</Text>
                       <Text style={styles.insightBody}>
-                        Auto-generated bar chart with animated growth markers.
+                        Auto-generated chart mapped to your spreadsheet.
                       </Text>
                       <View style={styles.chartBars}>
-                        {[72, 88, 56, 80].map((value, index) => (
+                        {chartBars.map((value, index) => (
                           <View key={`bar-${index}`} style={styles.chartBarWrap}>
                             <View style={[styles.chartBar, { height: value }]} />
                           </View>
@@ -584,10 +808,11 @@ const App = () => {
                     </View>
                     <View style={styles.insightCard}>
                       <Text style={styles.insightTitle}>AI actions</Text>
-                      <Text style={styles.insightBody}>• Highlight top growth rows</Text>
-                      <Text style={styles.insightBody}>• Add a summary tab</Text>
-                      <Text style={styles.insightBody}>• Animate KPI cards</Text>
-                      <Text style={styles.insightBody}>• Insert forecast chart</Text>
+                      {aiActions.map((action) => (
+                        <Text key={action} style={styles.insightBody}>
+                          • {action}
+                        </Text>
+                      ))}
                     </View>
                   </View>
                 </View>
@@ -710,6 +935,38 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 6
   },
+  scraperRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
+  },
+  scraperLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#475569"
+  },
+  scraperToggle: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#cbd5f5",
+    backgroundColor: "#ffffff"
+  },
+  scraperToggleActive: {
+    borderColor: "#0f172a",
+    backgroundColor: "#0f172a"
+  },
+  scraperToggleText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0f172a"
+  },
+  scraperToggleTextActive: {
+    color: "#ffffff"
+  },
   providerChip: {
     borderRadius: 999,
     borderWidth: 1,
@@ -740,6 +997,12 @@ const styles = StyleSheet.create({
   },
   apiStatusSuccess: {
     color: "#15803d"
+  },
+  scraperStatus: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#0ea5e9"
   },
   headerBadges: {
     flexDirection: "row",
@@ -964,8 +1227,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 8
   },
+  savedRowActive: {
+    backgroundColor: "#e2e8f0",
+    borderRadius: 10,
+    paddingHorizontal: 8
+  },
   savedName: {
     fontWeight: "600",
+    color: "#0f172a"
+  },
+  savedNameActive: {
     color: "#0f172a"
   },
   savedMeta: {
@@ -997,6 +1268,66 @@ const styles = StyleSheet.create({
   canvasBody: {
     marginTop: 16,
     flex: 1
+  },
+  reportCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    padding: 16,
+    marginBottom: 16
+  },
+  reportTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0f172a"
+  },
+  reportBody: {
+    marginTop: 8,
+    color: "#475569",
+    fontSize: 13,
+    lineHeight: 19
+  },
+  reportHighlights: {
+    marginTop: 12,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  highlightChip: {
+    backgroundColor: "#e0f2fe",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  highlightText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#0f172a"
+  },
+  metricRow: {
+    marginTop: 12,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12
+  },
+  metricCard: {
+    flex: 1,
+    minWidth: 140,
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    padding: 12
+  },
+  metricLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#64748b"
+  },
+  metricValue: {
+    marginTop: 6,
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0f172a"
   },
   sheetCard: {
     backgroundColor: "#f8fafc",
