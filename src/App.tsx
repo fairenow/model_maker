@@ -350,7 +350,7 @@ User request: ${prompt}
     "Generate a report to see the strategic synthesis and data attribution layer.";
 
   const reportSummaryText = reportSummary || defaultReportSummary;
-  const analysisOverviewText = analysisOverview || defaultAnalysisOverview;
+  const analysisOverviewText = analysisLayer?.overview || defaultAnalysisOverview;
 
   const buildReportLines = () => {
     const lines: string[] = [];
