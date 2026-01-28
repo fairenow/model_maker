@@ -552,7 +552,7 @@ const App = () => {
                             >
                               <TextInput
                                 value={cell}
-                                onChangeText={(value) =>
+                                onChangeText={(value: string) =>
                                   handleCellChange(rowIndex, cellIndex, value)
                                 }
                                 style={[
