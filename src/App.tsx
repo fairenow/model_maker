@@ -8,7 +8,7 @@ import {
   TextInput,
   useWindowDimensions,
   View
-} from "react-native";
+} from "react-native-web";
 
 import esbLogo from "./assets/esb_logo.png";
 import esbMeta from "./assets/esb_meta.png";
