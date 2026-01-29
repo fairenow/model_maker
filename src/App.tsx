@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import {
   Image,
   Pressable,
@@ -9,6 +9,8 @@ import {
   useWindowDimensions,
   View
 } from "react-native-web";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 
 import esbLogo from "./assets/esb_logo.png";
 import esbMeta from "./assets/esb_meta.png";
@@ -142,6 +144,7 @@ const App = () => {
     jinaHttps: true,
     jinaDirect: false
   });
+  const reportExportRef = useRef<HTMLDivElement | null>(null);
 
   const scraperOptions = [
     {
@@ -344,6 +347,142 @@ User request: ${prompt}
       )
       .join("\n");
 
+  const defaultReportSummary =
+    "Start from a spreadsheet and we'll generate a report, charts, and export-ready data.";
+  const defaultAnalysisOverview =
+    "Generate a report to see the strategic synthesis and data attribution layer.";
+
+  const reportSummaryText = reportSummary || defaultReportSummary;
+  const analysisOverviewText = analysisLayer?.overview || defaultAnalysisOverview;
+
+  const buildReportLines = () => {
+    const lines: string[] = [];
+    lines.push("Report summary");
+    lines.push(reportSummaryText);
+    if (reportHighlights.length > 0) {
+      lines.push("Highlights");
+      reportHighlights.forEach((item) => {
+        lines.push(`• ${item}`);
+      });
+    }
+    if (reportMetrics.length > 0) {
+      lines.push("Metrics");
+      reportMetrics.forEach((metric) => {
+        lines.push(`${metric.label}: ${metric.value}`);
+      });
+    }
+    lines.push("");
+    lines.push("Strategic analysis layer");
+    lines.push(analysisOverviewText);
+    if (analysisKeyPoints.length > 0) {
+      lines.push("Key points");
+      analysisKeyPoints.forEach((item) => {
+        lines.push(`• ${item}`);
+      });
+    }
+    if (analysisStructuredPlan.length > 0) {
+      lines.push("Structured plan");
+      analysisStructuredPlan.forEach((item) => {
+        lines.push(`• ${item}`);
+      });
+    }
+    if (analysisOpportunities.length > 0) {
+      lines.push("Opportunities");
+      analysisOpportunities.forEach((item) => {
+        lines.push(`• ${item}`);
+      });
+    }
+    if (analysisRisks.length > 0) {
+      lines.push("Risks");
+      analysisRisks.forEach((item) => {
+        lines.push(`• ${item}`);
+      });
+    }
+    if (analysisDataAttribution.length > 0) {
+      lines.push("Data attribution");
+      analysisDataAttribution.forEach((item) => {
+        lines.push(`• ${item.source}: ${item.notes}`);
+      });
+    }
+    if (analysisConfidence) {
+      lines.push(`Confidence: ${analysisConfidence}`);
+    }
+    lines.push("");
+    lines.push(`${activeSheet.name} (Last updated ${activeSheet.lastUpdated})`);
+    activeSheet.rows.forEach((row) => {
+      lines.push(row.join(" | "));
+    });
+    lines.push("");
+    lines.push(chartData.title);
+    chartData.labels.forEach((label, index) => {
+      lines.push(`${label}: ${chartData.values[index] ?? 0}`);
+    });
+    if (aiActions.length > 0) {
+      lines.push("");
+      lines.push("AI actions");
+      aiActions.forEach((action) => {
+        lines.push(`• ${action}`);
+      });
+    }
+    return lines;
+  };
+
+  const buildReportCsvRows = () => {
+    const rows: string[][] = [];
+    rows.push(["Report summary", reportSummaryText]);
+    if (reportHighlights.length > 0) {
+      rows.push(["Highlights"]);
+      reportHighlights.forEach((item) => rows.push([item]));
+    }
+    if (reportMetrics.length > 0) {
+      rows.push(["Metrics"]);
+      reportMetrics.forEach((metric) => rows.push([metric.label, metric.value]));
+    }
+    rows.push([]);
+    rows.push(["Strategic analysis layer", analysisOverviewText]);
+    if (analysisKeyPoints.length > 0) {
+      rows.push(["Key points"]);
+      analysisKeyPoints.forEach((item) => rows.push([item]));
+    }
+    if (analysisStructuredPlan.length > 0) {
+      rows.push(["Structured plan"]);
+      analysisStructuredPlan.forEach((item) => rows.push([item]));
+    }
+    if (analysisOpportunities.length > 0) {
+      rows.push(["Opportunities"]);
+      analysisOpportunities.forEach((item) => rows.push([item]));
+    }
+    if (analysisRisks.length > 0) {
+      rows.push(["Risks"]);
+      analysisRisks.forEach((item) => rows.push([item]));
+    }
+    if (analysisDataAttribution.length > 0) {
+      rows.push(["Data attribution"]);
+      analysisDataAttribution.forEach((item) =>
+        rows.push([`${item.source}: ${item.notes}`])
+      );
+    }
+    if (analysisConfidence) {
+      rows.push(["Confidence", analysisConfidence]);
+    }
+    rows.push([]);
+    rows.push([activeSheet.name, `Last updated ${activeSheet.lastUpdated}`]);
+    rows.push([]);
+    activeSheet.rows.forEach((row) => rows.push([...row]));
+    rows.push([]);
+    rows.push(["Chart", chartData.title]);
+    rows.push(["Label", "Value"]);
+    chartData.labels.forEach((label, index) => {
+      rows.push([label, `${chartData.values[index] ?? 0}`]);
+    });
+    if (aiActions.length > 0) {
+      rows.push([]);
+      rows.push(["AI actions"]);
+      aiActions.forEach((action) => rows.push([action]));
+    }
+    return rows;
+  };
+
   const downloadBlob = (content: BlobPart | Blob, filename: string, type: string) => {
     const blob = content instanceof Blob ? content : new Blob([content], { type });
     const url = window.URL.createObjectURL(blob);
@@ -355,31 +494,84 @@ User request: ${prompt}
   };
 
   const handleDownloadCsv = () => {
-    const csv = toCsv(activeSheet.rows);
+    const csv = toCsv(buildReportCsvRows());
     downloadBlob(csv, `${activeSheet.name.replace(/\s+/g, "-").toLowerCase()}.csv`, "text/csv");
   };
 
   const escapePdfText = (text: string) =>
     text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 
-  const buildPdf = (rows: string[][]) => {
-    const encoder = new TextEncoder();
-    const lines = rows.map((row) => row.join(" | "));
-    const maxLines = Math.min(lines.length, 40);
-    const contentLines = [];
-    for (let index = 0; index < maxLines; index += 1) {
-      const line = escapePdfText(lines[index]);
-      const y = 740 - index * 16;
-      contentLines.push(`BT /F1 12 Tf 72 ${y} Td (${line}) Tj ET`);
+  const wrapText = (text: string, maxLength: number) => {
+    if (!text) {
+      return [""];
     }
-    const content = contentLines.join("\n");
-    const objects = [
-      "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-      "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
-      `4 0 obj\n<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream\nendobj\n`,
-      "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
-    ];
+    const words = text.split(" ");
+    const lines: string[] = [];
+    let currentLine = "";
+    words.forEach((word) => {
+      const candidate = currentLine ? `${currentLine} ${word}` : word;
+      if (candidate.length > maxLength) {
+        if (currentLine) {
+          lines.push(currentLine);
+        }
+        currentLine = word;
+      } else {
+        currentLine = candidate;
+      }
+    });
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    return lines;
+  };
+
+  const buildPdf = (lines: string[]) => {
+    const encoder = new TextEncoder();
+    const lineHeight = 16;
+    const fontSize = 12;
+    const margin = 72;
+    const pageHeight = 792;
+    const maxLineLength = 90;
+    const maxLinesPerPage = Math.floor((pageHeight - margin * 2) / lineHeight);
+    const wrappedLines = lines.flatMap((line) => wrapText(line, maxLineLength));
+    const pages: string[][] = [];
+    for (let index = 0; index < wrappedLines.length; index += maxLinesPerPage) {
+      pages.push(wrappedLines.slice(index, index + maxLinesPerPage));
+    }
+    if (pages.length === 0) {
+      pages.push([""]);
+    }
+    const pageObjectsStart = 3;
+    const fontObjectNumber = pageObjectsStart + pages.length * 2;
+    const pageKids = pages
+      .map((_, index) => `${pageObjectsStart + index * 2} 0 R`)
+      .join(" ");
+    const objects: string[] = [];
+    objects.push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    objects.push(
+      `2 0 obj\n<< /Type /Pages /Kids [${pageKids}] /Count ${pages.length} >>\nendobj\n`
+    );
+    pages.forEach((pageLines, index) => {
+      const pageObjectNumber = pageObjectsStart + index * 2;
+      const contentObjectNumber = pageObjectNumber + 1;
+      const contentLines = pageLines.map((line, lineIndex) => {
+        const escapedLine = escapePdfText(line);
+        const y = pageHeight - margin - lineIndex * lineHeight;
+        return `BT /F1 ${fontSize} Tf ${margin} ${y} Td (${escapedLine}) Tj ET`;
+      });
+      const content = contentLines.join("\n");
+      objects.push(
+        `${pageObjectNumber} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contentObjectNumber} 0 R /Resources << /Font << /F1 ${fontObjectNumber} 0 R >> >> >>\nendobj\n`
+      );
+      objects.push(
+        `${contentObjectNumber} 0 obj\n<< /Length ${
+          encoder.encode(content).length
+        } >>\nstream\n${content}\nendstream\nendobj\n`
+      );
+    });
+    objects.push(
+      `${fontObjectNumber} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`
+    );
     const header = "%PDF-1.4\n";
     const offsets: number[] = [0];
     let offset = encoder.encode(header).length;
@@ -392,14 +584,46 @@ User request: ${prompt}
       .slice(1)
       .map((value) => `${value.toString().padStart(10, "0")} 00000 n \n`)
       .join("");
-    const xref = `xref\n0 6\n0000000000 65535 f \n${xrefEntries}`;
-    const trailer = `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+    const xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${xrefEntries}`;
+    const trailer = `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
     return new Blob([header, ...objects, xref, trailer], { type: "application/pdf" });
   };
 
-  const handleDownloadPdf = () => {
-    const pdf = buildPdf(activeSheet.rows);
-    downloadBlob(pdf, `${activeSheet.name.replace(/\s+/g, "-").toLowerCase()}.pdf`, "application/pdf");
+  const handleDownloadPdf = async () => {
+    const filename = `${activeSheet.name.replace(/\s+/g, "-").toLowerCase()}.pdf`;
+    const exportNode = reportExportRef.current;
+    if (!exportNode) {
+      const pdf = buildPdf(buildReportLines());
+      downloadBlob(pdf, filename, "application/pdf");
+      return;
+    }
+    const canvas = await html2canvas(exportNode, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#f8fafc"
+    });
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF({
+      orientation: "portrait",
+      unit: "pt",
+      format: "letter"
+    });
+    const margin = 24;
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const renderWidth = pageWidth - margin * 2;
+    const renderHeight = (canvas.height * renderWidth) / canvas.width;
+    let heightLeft = renderHeight;
+    let position = margin;
+    pdf.addImage(imgData, "PNG", margin, position, renderWidth, renderHeight);
+    heightLeft -= pageHeight - margin * 2;
+    while (heightLeft > 0) {
+      pdf.addPage();
+      position = margin - (renderHeight - heightLeft);
+      pdf.addImage(imgData, "PNG", margin, position, renderWidth, renderHeight);
+      heightLeft -= pageHeight - margin * 2;
+    }
+    pdf.save(filename);
   };
 
   const buildOpenAiReply = async (prompt: string) => {
@@ -916,13 +1140,13 @@ User request: ${prompt}
                     </Pressable>
                   </View>
                 </View>
-                <View style={styles.canvasBody}>
+                <View
+                  style={styles.canvasBody}
+                  ref={reportExportRef as React.RefObject<any>}
+                >
                   <View style={styles.reportCard}>
                     <Text style={styles.reportTitle}>Report summary</Text>
-                    <Text style={styles.reportBody}>
-                      {reportSummary ||
-                        "Start from a spreadsheet and we'll generate a report, charts, and export-ready data."}
-                    </Text>
+                    <Text style={styles.reportBody}>{reportSummaryText}</Text>
                     {reportHighlights.length > 0 && (
                       <View style={styles.reportHighlights}>
                         {reportHighlights.map((item, index) => (
@@ -945,10 +1169,7 @@ User request: ${prompt}
                   </View>
                   <View style={styles.reportCard}>
                     <Text style={styles.reportTitle}>Strategic analysis layer</Text>
-                    <Text style={styles.reportBody}>
-                      {analysisOverview ||
-                        "Generate a report to see the strategic synthesis and data attribution layer."}
-                    </Text>
+                    <Text style={styles.reportBody}>{analysisOverviewText}</Text>
                     {analysisKeyPoints.length > 0 && (
                       <View style={styles.reportHighlights}>
                         {analysisKeyPoints.map((item, index) => (
