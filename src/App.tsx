@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import {
   Image,
   Pressable,
@@ -9,6 +9,8 @@ import {
   useWindowDimensions,
   View
 } from "react-native-web";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 
 import esbLogo from "./assets/esb_logo.png";
 import esbMeta from "./assets/esb_meta.png";
@@ -142,6 +144,7 @@ const App = () => {
     jinaHttps: true,
     jinaDirect: false
   });
+  const reportExportRef = useRef<HTMLDivElement | null>(null);
 
   const scraperOptions = [
     {
@@ -594,9 +597,41 @@ User request: ${prompt}
     return new Blob([header, ...objects, xref, trailer], { type: "application/pdf" });
   };
 
-  const handleDownloadPdf = () => {
-    const pdf = buildPdf(buildReportLines());
-    downloadBlob(pdf, `${activeSheet.name.replace(/\s+/g, "-").toLowerCase()}.pdf`, "application/pdf");
+  const handleDownloadPdf = async () => {
+    const filename = `${activeSheet.name.replace(/\s+/g, "-").toLowerCase()}.pdf`;
+    const exportNode = reportExportRef.current;
+    if (!exportNode) {
+      const pdf = buildPdf(buildReportLines());
+      downloadBlob(pdf, filename, "application/pdf");
+      return;
+    }
+    const canvas = await html2canvas(exportNode, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#f8fafc"
+    });
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF({
+      orientation: "portrait",
+      unit: "pt",
+      format: "letter"
+    });
+    const margin = 24;
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const renderWidth = pageWidth - margin * 2;
+    const renderHeight = (canvas.height * renderWidth) / canvas.width;
+    let heightLeft = renderHeight;
+    let position = margin;
+    pdf.addImage(imgData, "PNG", margin, position, renderWidth, renderHeight);
+    heightLeft -= pageHeight - margin * 2;
+    while (heightLeft > 0) {
+      pdf.addPage();
+      position = margin - (renderHeight - heightLeft);
+      pdf.addImage(imgData, "PNG", margin, position, renderWidth, renderHeight);
+      heightLeft -= pageHeight - margin * 2;
+    }
+    pdf.save(filename);
   };
 
   const buildOpenAiReply = async (prompt: string) => {
@@ -1105,7 +1140,10 @@ User request: ${prompt}
                     </Pressable>
                   </View>
                 </View>
-                <View style={styles.canvasBody}>
+                <View
+                  style={styles.canvasBody}
+                  ref={reportExportRef as React.RefObject<any>}
+                >
                   <View style={styles.reportCard}>
                     <Text style={styles.reportTitle}>Report summary</Text>
                     <Text style={styles.reportBody}>{reportSummaryText}</Text>
